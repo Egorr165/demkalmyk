@@ -1,0 +1,7 @@
+*.iml
+.venv
+.idea
+*__pychache__
+build
+dist
+*.spec
