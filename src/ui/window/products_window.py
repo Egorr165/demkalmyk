@@ -1,54 +1,41 @@
+"""
+Главное окно приложения — список товаров.
+Отображает данные из БД с учётом роли пользователя.
+"""
 import os
 from decimal import Decimal
-
 from PyQt6.QtGui import QPixmap, QIcon, QColor, QFont
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QMainWindow,
-    QWidget,
-    QVBoxLayout,
-    QHBoxLayout,
-    QGridLayout,
-    QLabel,
-    QPushButton,
-    QLineEdit,
-    QComboBox,
-    QTableWidget,
-    QTableWidgetItem, QListWidget, QListWidgetItem,
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout,
+    QLabel, QPushButton, QLineEdit, QComboBox,
+    QTableWidget, QTableWidgetItem,
 )
 from service.data_service import DataService
 from ui.dialog.login_dialog import LoginDialog
 from ui.dialog.product_form_dialog import ProductFormDialog
 from ui.dialog.orders_dialog import OrdersDialog
 from util.constants import (
-    ICON_PNG,
-    ICON_ICO,
-    PICTURE_PNG,
-    COLOR_DISCOUNT_ROW,
-    COLOR_ZERO_STOCK,
-    COLOR_WHITE,
-    COLOR_ACCENT,
-    COLOR_SECOND, RESOURCES_DIR, PHOTOS_DIR, FONT,
+    ICON_PNG, ICON_ICO, PICTURE_PNG,
+    COLOR_DISCOUNT_ROW, COLOR_ZERO_STOCK, COLOR_WHITE,
+    COLOR_ACCENT, COLOR_SECOND, PHOTOS_DIR, FONT,
 )
 
 
 class ProductsWindow(QMainWindow):
-
     def __init__(self, user):
         super().__init__()
-
         self.user = user
         self.goods = []
+        self.editor_opened = False  # флаг для блокировки второго окна редактирования
 
-        self.setWindowTitle("Товары")
+        self.setWindowTitle("ООО «СтройМатериалы» — Список товаров")
         self.resize(1500, 800)
-
         if os.path.exists(ICON_ICO):
             self.setWindowIcon(QIcon(ICON_ICO))
 
         root = QWidget()
         self.setCentralWidget(root)
-
         layout = QVBoxLayout(root)
 
         self.build_header(layout)
@@ -60,15 +47,16 @@ class ProductsWindow(QMainWindow):
         self.load_data()
 
     def build_header(self, layout):
+        """Шапка: логотип, заголовок, роль, ФИО, кнопки."""
         header = QGridLayout()
 
         logo = QLabel()
         if os.path.exists(ICON_PNG):
-            pix = QPixmap(ICON_PNG).scaled(120, 70)
+            pix = QPixmap(ICON_PNG).scaled(120, 70, Qt.AspectRatioMode.KeepAspectRatio)
             logo.setPixmap(pix)
 
-        title = QLabel("Каталог товаров")
-        title.setFont(QFont(FONT, 20))
+        title = QLabel("ООО «СтройМатериалы»")
+        title.setFont(QFont(FONT, 20, QFont.Weight.Bold))
 
         self.role_label = QLabel(f"Роль: {self.user.role_name}")
         self.user_label = QLabel(f"{self.user.full_name}")
@@ -88,47 +76,52 @@ class ProductsWindow(QMainWindow):
         header.addWidget(logo, 0, 0)
         header.addWidget(title, 0, 1)
         header.addLayout(right, 0, 2)
-
         header.setColumnStretch(1, 1)
 
         layout.addLayout(header)
 
     def build_filters(self, layout):
+        """Панель фильтров/поиска/сортировки — только для менеджера и админа."""
         self.filters = QWidget()
         f = QHBoxLayout(self.filters)
 
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Поиск")
+        self.search.setPlaceholderText("Поиск по всем полям...")
 
-        self.supplier = QComboBox()
+        # ТЗ: фильтр по ПРОИЗВОДИТЕЛЮ (не по поставщику)
+        self.manufacture = QComboBox()
+
+        # ТЗ: сортировка по остатку, цене и скидке
         self.sort = QComboBox()
-
         self.sort.addItems([
             "Без сортировки",
-            "По количеству ↑",
-            "По количеству ↓"
+            "По количеству ↑", "По количеству ↓",
+            "По цене ↑", "По цене ↓",
+            "По скидке ↑", "По скидке ↓",
         ])
 
-        f.addWidget(QLabel("Поиск"))
-        f.addWidget(self.search)
-        f.addWidget(QLabel("Поставщик"))
-        f.addWidget(self.supplier)
-        f.addWidget(QLabel("Сортировка"))
-        f.addWidget(self.sort)
+        f.addWidget(QLabel("Поиск:"))
+        f.addWidget(self.search, 2)
+        f.addWidget(QLabel("Производитель:"))
+        f.addWidget(self.manufacture, 1)
+        f.addWidget(QLabel("Сортировка:"))
+        f.addWidget(self.sort, 1)
 
         layout.addWidget(self.filters)
 
+        # Реакция на изменение в реальном времени (без кнопки «Найти»)
         self.search.textChanged.connect(self.apply_filters)
-        self.supplier.currentTextChanged.connect(self.apply_filters)
+        self.manufacture.currentTextChanged.connect(self.apply_filters)
         self.sort.currentTextChanged.connect(self.apply_filters)
 
     def build_admin_panel(self, layout):
+        """Панель CRUD-кнопок — только для администратора."""
         self.admin_panel = QWidget()
         a = QHBoxLayout(self.admin_panel)
 
-        self.btn_add = QPushButton("Добавить")
-        self.btn_edit = QPushButton("Редактировать")
-        self.btn_delete = QPushButton("Удалить")
+        self.btn_add = QPushButton("Добавить товар")
+        self.btn_edit = QPushButton("Редактировать товар")
+        self.btn_delete = QPushButton("Удалить товар")
 
         self.btn_add.clicked.connect(self.add_good)
         self.btn_edit.clicked.connect(self.edit_good)
@@ -146,194 +139,179 @@ class ProductsWindow(QMainWindow):
         layout.addWidget(self.admin_panel)
 
     def build_table(self, layout):
-        self.list_widget = QListWidget()
-        layout.addWidget(self.list_widget)
+        """Таблица товаров — 12 колонок по макету ТЗ."""
+        self.table = QTableWidget()
+        self.table.setColumnCount(12)
+        self.table.setHorizontalHeaderLabels([
+            "Фото", "Артикул", "Наименование", "Категория", "Описание",
+            "Производитель", "Поставщик", "Цена", "Цена со скидкой",
+            "Ед.", "Остаток", "Скидка",
+        ])
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.doubleClicked.connect(self.row_double_click)
+        layout.addWidget(self.table)
 
     def load_data(self):
         self.goods = DataService.get_products()
 
-        self.supplier.clear()
-        self.supplier.addItem("Все")
-
-        for g in self.goods:
-            if g["supplier_name"] not in [self.supplier.itemText(i) for i in range(self.supplier.count())]:
-                self.supplier.addItem(g["supplier_name"])
+        # Заполняем выпадающий список производителей
+        self.manufacture.clear()
+        self.manufacture.addItem("Все производители")
+        for m in DataService.get_manufacture_names():
+            self.manufacture.addItem(m)
 
         self.apply_filters()
 
     def apply_filters(self):
-        data = self.goods
+        """Совместное применение поиска + фильтра + сортировки."""
+        data = list(self.goods)
 
-        text = self.search.text().lower()
-        supplier = self.supplier.currentText()
-        sort = self.sort.currentText()
+        # Фильтрация и поиск доступны только менеджеру и администратору
+        if self.user.role_name in ("Администратор", "Менеджер"):
+            text = self.search.text().lower()
+            manufacture = self.manufacture.currentText()
+            sort_mode = self.sort.currentText()
 
-        if supplier != "Все":
-            data = [x for x in data if x["supplier_name"] == supplier]
+            # Фильтр по производителю
+            if manufacture != "Все производители":
+                data = [x for x in data if x["manufacture_name"] == manufacture]
 
-        if text:
-            data = [
-                x for x in data
-                if text in (x["name"] or "").lower()
-                   or text in (x["article"] or "").lower()
-            ]
+            # Поиск по всем текстовым полям
+            if text:
+                def hit(row):
+                    fields = [
+                        row.get("article"), row.get("name"),
+                        row.get("category_name"), row.get("description"),
+                        row.get("manufacture_name"), row.get("supplier_name"),
+                        row.get("measure"),
+                    ]
+                    return any(text in str(v or "").lower() for v in fields)
+                data = [x for x in data if hit(x)]
 
-        if sort == "По количеству ↑":
-            data.sort(key=lambda x: x["amount"])
-        elif sort == "По количеству ↓":
-            data.sort(key=lambda x: x["amount"], reverse=True)
+            # Сортировка (6 режимов по ТЗ)
+            if sort_mode == "По количеству ↑":
+                data.sort(key=lambda x: x["amount"])
+            elif sort_mode == "По количеству ↓":
+                data.sort(key=lambda x: x["amount"], reverse=True)
+            elif sort_mode == "По цене ↑":
+                data.sort(key=lambda x: x["cost"])
+            elif sort_mode == "По цене ↓":
+                data.sort(key=lambda x: x["cost"], reverse=True)
+            elif sort_mode == "По скидке ↑":
+                data.sort(key=lambda x: x["discount"])
+            elif sort_mode == "По скидке ↓":
+                data.sort(key=lambda x: x["discount"], reverse=True)
 
         self.fill_table(data)
 
     def fill_table(self, rows):
-        self.list_widget.clear()
-
-        for r in rows:
-            item_widget = QWidget()
-
-            root = QHBoxLayout(item_widget)
-            root.setContentsMargins(10, 10, 10, 10)
-
-            # Фото
+        """Заполнение таблицы с подсветкой строк по ТЗ."""
+        self.table.setRowCount(len(rows))
+        for i, r in enumerate(rows):
+            # Фото товара (или заглушка)
             photo_label = QLabel()
+            path = os.path.join(PHOTOS_DIR, r["photo"]) if r["photo"] else PICTURE_PNG
+            if not os.path.exists(path):
+                path = PICTURE_PNG
+            pix = QPixmap(path).scaled(80, 60, Qt.AspectRatioMode.KeepAspectRatio)
+            photo_label.setPixmap(pix)
+            photo_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.table.setCellWidget(i, 0, photo_label)
 
-            path = (
-                os.path.join(PHOTOS_DIR, os.path.basename(r["photo"]))
-                if r["photo"]
-                else PICTURE_PNG
-            )
-
-            pix = QPixmap(path)
-
-            if pix.isNull():
-                pix = QPixmap(PICTURE_PNG)
-
-            photo_label.setPixmap(
-                pix.scaled(
-                    200,
-                    200,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                )
-            )
-
-            root.addWidget(photo_label)
-
-            # Информация
-            info = QVBoxLayout()
-
-            article = QLabel(
-                f'{r["article"]} | {r["name"]}'
-            )
-
-            manufacturer = QLabel(
-                f'Производитель: {r["manufacture_name"]}'
-            )
-
-            supplier = QLabel(
-                f'Поставщик: {r["supplier_name"]}'
-            )
-
-            category = QLabel(
-                f'Категория: {r["category_name"]}'
-            )
-
-            stock = QLabel(
-                f'Остаток: {r["amount"]} {r["measure"]}'
-            )
-
-            info.addWidget(article)
-            info.addWidget(manufacturer)
-            info.addWidget(supplier)
-            info.addWidget(category)
-            info.addWidget(stock)
-
-            root.addLayout(info)
-            root.addStretch()
-
-            # Блок скидки справа
+            # Расчёт цены со скидкой
             price = Decimal(str(r["cost"]))
             discount = Decimal(str(r["discount"]))
             final = price * (Decimal(100) - discount) / Decimal(100)
 
-            discount_block = QVBoxLayout()
+            values = [
+                r["article"], r["name"], r["category_name"], r["description"],
+                r["manufacture_name"], r["supplier_name"],
+                f"{price:.2f}", f"{final:.2f}",
+                r["measure"], str(r["amount"]), f"{discount:.2f}",
+            ]
+            for c, v in enumerate(values, start=1):
+                item = QTableWidgetItem(str(v))
+                item.setData(Qt.ItemDataRole.UserRole, r["id"])
+                self.table.setItem(i, c, item)
 
-            old_price = QLabel(f"{price:.2f} ₽")
-
+            # Зачёркивание старой цены красным, если есть скидка
             if discount > 0:
-                f = old_price.font()
+                price_item = self.table.item(i, 7)
+                f = price_item.font()
                 f.setStrikeOut(True)
-                old_price.setFont(f)
-                old_price.setStyleSheet("color:red;")
+                price_item.setFont(f)
+                price_item.setForeground(QColor("red"))
 
-            final_price = QLabel(f"{final:.2f} ₽")
-            final_price.setFont(QFont(FONT, 12, QFont.Weight.Bold))
-
-            discount_label = QLabel(
-                f"Скидка {discount}%"
-            )
-
-            discount_block.addWidget(old_price)
-            discount_block.addWidget(final_price)
-            discount_block.addWidget(discount_label)
-
-            root.addLayout(discount_block)
-
+            # Подсветка строк по ТЗ:
+            # - остаток = 0 → голубой
+            # - скидка > 12% → #F4A460
+            bg_color = QColor(COLOR_WHITE)
             if r["amount"] == 0:
-                item_widget.setStyleSheet(
-                    f"background:{COLOR_ZERO_STOCK};"
-                )
-            elif discount > 15:
-                item_widget.setStyleSheet(
-                    f"background:{COLOR_DISCOUNT_ROW};"
-                )
+                bg_color = QColor(COLOR_ZERO_STOCK)
+            elif discount > 12:
+                bg_color = QColor(COLOR_DISCOUNT_ROW)
 
-            item = QListWidgetItem()
+            for c in range(1, self.table.columnCount()):
+                cell = self.table.item(i, c)
+                if cell:
+                    cell.setBackground(bg_color)
 
-            item.setData(
-                Qt.ItemDataRole.UserRole,
-                r["id"]
-            )
-
-            item.setSizeHint(
-                item_widget.sizeHint()
-            )
-
-            self.list_widget.addItem(item)
-            self.list_widget.setItemWidget(
-                item,
-                item_widget
-            )
+        self.table.resizeColumnsToContents()
+        self.table.setColumnWidth(0, 90)
 
     def selected_id(self):
-        item = self.list_widget.currentItem()
-
-        if not item:
+        row = self.table.currentRow()
+        if row < 0:
             return None
+        item = self.table.item(row, 1)
+        return item.data(Qt.ItemDataRole.UserRole) if item else None
 
-        return item.data(Qt.ItemDataRole.UserRole)
+    def row_double_click(self):
+        """Двойной клик — переход к редактированию (только админ)."""
+        if self.user.role_name == "Администратор":
+            self.edit_good()
 
     def add_good(self):
+        if self.editor_opened:
+            return
+        self.editor_opened = True
         dlg = ProductFormDialog(None)
         if dlg.exec():
             self.load_data()
+        self.editor_opened = False
 
     def edit_good(self):
         gid = self.selected_id()
         if not gid:
             return
+        if self.editor_opened:
+            return
+        self.editor_opened = True
         dlg = ProductFormDialog(gid)
         if dlg.exec():
             self.load_data()
+        self.editor_opened = False
 
     def delete_good(self):
+        """Удаление товара: запрещено, если товар есть в заказах."""
         gid = self.selected_id()
         if not gid:
             return
-
-        DataService.delete_product(gid)
+        if DataService.product_in_orders(gid):
+            from util.messages import show_warn
+            show_warn(self, "Товар присутствует в заказе. Удаление невозможно.")
+            return
+        from util.messages import show_error
+        try:
+            DataService.delete_product(gid)
+        except Exception as ex:
+            show_error(self, f"Ошибка удаления:\n{ex}")
+            return
         self.load_data()
 
     def apply_role_rules(self):
+        """Скрытие/показ элементов интерфейса в зависимости от роли."""
         is_admin = self.user.role_name == "Администратор"
         is_manager = self.user.role_name in ("Администратор", "Менеджер")
 
@@ -347,7 +325,6 @@ class ProductsWindow(QMainWindow):
 
     def logout(self):
         self.close()
-
         login = LoginDialog()
         if login.exec():
             self.next = ProductsWindow(login.user_data)
